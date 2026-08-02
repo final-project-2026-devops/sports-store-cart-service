@@ -1,7 +1,11 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes import cart
+
+logger = logging.getLogger("cart-service")
 
 app = FastAPI(title="Sports Store — Cart Service")
 
