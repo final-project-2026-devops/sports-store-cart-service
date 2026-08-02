@@ -1,39 +1,16 @@
 import os
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 os.environ["JWT_SECRET"] = "test-secret"
+os.environ.setdefault("DYNAMODB_TABLE_NAME", "test-table")
 
 import jwt
 import pytest
 from fastapi.testclient import TestClient
 
+from database import get_db_table
 from main import app
-
-
-class AsyncCursor:
-    """Minimal async iterator for mocking Motor cursors (chainable skip/limit)."""
-
-    def __init__(self, items):
-        self.items = list(items)
-
-    def skip(self, _n):
-        return self
-
-    def limit(self, _n):
-        return self
-
-    def sort(self, *_args, **_kwargs):
-        return self
-
-    def __aiter__(self):
-        self._iter = iter(self.items)
-        return self
-
-    async def __anext__(self):
-        try:
-            return next(self._iter)
-        except StopIteration:
-            raise StopAsyncIteration
 
 
 def make_token(user_id="507f1f77bcf86cd799439011", email="user@test.com",
@@ -48,8 +25,30 @@ def make_token(user_id="507f1f77bcf86cd799439011", email="user@test.com",
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def mock_table():
+    """Stand-in for the DynamoDB Table resource yielded by get_db_table.
+
+    get_item/put_item/delete_item are AsyncMocks; configure their
+    return_value per-test to emulate DynamoDB response shapes.
+    """
+    table = MagicMock()
+    table.get_item = AsyncMock(return_value={})
+    table.put_item = AsyncMock(return_value={})
+    table.delete_item = AsyncMock(return_value={})
+    return table
+
+
+@pytest.fixture
+def client(mock_table):
+    async def _override_get_db_table():
+        yield mock_table
+
+    app.dependency_overrides[get_db_table] = _override_get_db_table
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.pop(get_db_table, None)
 
 
 @pytest.fixture

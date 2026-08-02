@@ -1,10 +1,17 @@
-from motor.motor_asyncio import AsyncIOMotorClient
-from os import environ
+import os
+
+import aioboto3
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URI = environ.get("MONGO_URI", "mongodb://localhost:27017")
-client = AsyncIOMotorClient(MONGO_URI)
-db = client["cart_db"]
-carts_collection = db["carts"]
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+DYNAMODB_TABLE_NAME = os.environ["DYNAMODB_TABLE_NAME"]
+
+session = aioboto3.Session()
+
+
+async def get_db_table():
+    async with session.resource("dynamodb", region_name=AWS_REGION) as dynamodb:
+        table = await dynamodb.Table(DYNAMODB_TABLE_NAME)
+        yield table
