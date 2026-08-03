@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 USER_ID = "507f1f77bcf86cd799439011"
 
@@ -27,13 +27,17 @@ def cart_item(quantity=2):
     }
 
 
-def stored_cart(quantity=2):
-    return {"_id": "abc", "user_id": USER_ID, "items": [cart_item(quantity)]}
+def stored_item(quantity=2):
+    return {
+        "user_id": USER_ID,
+        "items": [cart_item(quantity)],
+        "updated_at": "2024-01-01T00:00:00+00:00",
+    }
 
 
 def test_get_cart_empty_shape(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col:
-        mock_col.find_one = AsyncMock(return_value=None)
+    with patch("routes.cart.carts_table") as mock_table:
+        mock_table.get_item = MagicMock(return_value={})
         response = client.get("/api/cart", headers=auth_headers)
 
     assert response.status_code == 200
@@ -41,8 +45,8 @@ def test_get_cart_empty_shape(client, auth_headers):
 
 
 def test_get_cart_computes_subtotal(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col:
-        mock_col.find_one = AsyncMock(return_value=stored_cart(quantity=2))
+    with patch("routes.cart.carts_table") as mock_table:
+        mock_table.get_item = MagicMock(return_value={"Item": stored_item(quantity=2)})
         response = client.get("/api/cart", headers=auth_headers)
 
     assert response.status_code == 200
@@ -55,10 +59,10 @@ def test_get_cart_requires_token(client):
 
 
 def test_add_item_creates_snapshot(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col, \
+    with patch("routes.cart.carts_table") as mock_table, \
          patch("routes.cart.catalog_client") as mock_catalog:
-        mock_col.find_one = AsyncMock(return_value=None)
-        mock_col.update_one = AsyncMock()
+        mock_table.get_item = MagicMock(return_value={})
+        mock_table.put_item = MagicMock()
         mock_catalog.get_variant = AsyncMock(return_value=VARIANT_SNAPSHOT.copy())
         response = client.post(
             "/api/cart/items",
@@ -70,15 +74,15 @@ def test_add_item_creates_snapshot(client, auth_headers):
     body = response.json()
     assert body["items"][0] == cart_item(quantity=2)
     assert body["subtotal"] == 259.98
-    saved_items = mock_col.update_one.call_args.args[1]["$set"]["items"]
+    saved_items = mock_table.put_item.call_args.kwargs["Item"]["items"]
     assert saved_items[0]["sku"] == "VR-BLK-42"
 
 
 def test_add_same_sku_merges_quantity(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col, \
+    with patch("routes.cart.carts_table") as mock_table, \
          patch("routes.cart.catalog_client") as mock_catalog:
-        mock_col.find_one = AsyncMock(return_value=stored_cart(quantity=2))
-        mock_col.update_one = AsyncMock()
+        mock_table.get_item = MagicMock(return_value={"Item": stored_item(quantity=2)})
+        mock_table.put_item = MagicMock()
         mock_catalog.get_variant = AsyncMock(return_value=VARIANT_SNAPSHOT.copy())
         response = client.post(
             "/api/cart/items",
@@ -92,9 +96,9 @@ def test_add_same_sku_merges_quantity(client, auth_headers):
 
 def test_add_item_insufficient_stock_409(client, auth_headers):
     low_stock = dict(VARIANT_SNAPSHOT, stock_quantity=1)
-    with patch("routes.cart.carts_collection") as mock_col, \
+    with patch("routes.cart.carts_table") as mock_table, \
          patch("routes.cart.catalog_client") as mock_catalog:
-        mock_col.find_one = AsyncMock(return_value=None)
+        mock_table.get_item = MagicMock(return_value={})
         mock_catalog.get_variant = AsyncMock(return_value=low_stock)
         response = client.post(
             "/api/cart/items",
@@ -106,9 +110,9 @@ def test_add_item_insufficient_stock_409(client, auth_headers):
 
 
 def test_update_item_quantity(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col:
-        mock_col.find_one = AsyncMock(return_value=stored_cart(quantity=2))
-        mock_col.update_one = AsyncMock()
+    with patch("routes.cart.carts_table") as mock_table:
+        mock_table.get_item = MagicMock(return_value={"Item": stored_item(quantity=2)})
+        mock_table.put_item = MagicMock()
         response = client.put(
             "/api/cart/items/VR-BLK-42",
             json={"quantity": 4},
@@ -120,9 +124,9 @@ def test_update_item_quantity(client, auth_headers):
 
 
 def test_update_item_zero_removes(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col:
-        mock_col.find_one = AsyncMock(return_value=stored_cart(quantity=2))
-        mock_col.update_one = AsyncMock()
+    with patch("routes.cart.carts_table") as mock_table:
+        mock_table.get_item = MagicMock(return_value={"Item": stored_item(quantity=2)})
+        mock_table.put_item = MagicMock()
         response = client.put(
             "/api/cart/items/VR-BLK-42",
             json={"quantity": 0},
@@ -134,8 +138,8 @@ def test_update_item_zero_removes(client, auth_headers):
 
 
 def test_update_missing_item_404(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col:
-        mock_col.find_one = AsyncMock(return_value=None)
+    with patch("routes.cart.carts_table") as mock_table:
+        mock_table.get_item = MagicMock(return_value={})
         response = client.put(
             "/api/cart/items/GHOST",
             json={"quantity": 1},
@@ -146,9 +150,9 @@ def test_update_missing_item_404(client, auth_headers):
 
 
 def test_remove_item(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col:
-        mock_col.find_one = AsyncMock(return_value=stored_cart(quantity=2))
-        mock_col.update_one = AsyncMock()
+    with patch("routes.cart.carts_table") as mock_table:
+        mock_table.get_item = MagicMock(return_value={"Item": stored_item(quantity=2)})
+        mock_table.put_item = MagicMock()
         response = client.delete(
             "/api/cart/items/VR-BLK-42", headers=auth_headers
         )
@@ -158,10 +162,10 @@ def test_remove_item(client, auth_headers):
 
 
 def test_clear_cart(client, auth_headers):
-    with patch("routes.cart.carts_collection") as mock_col:
-        mock_col.delete_one = AsyncMock()
+    with patch("routes.cart.carts_table") as mock_table:
+        mock_table.delete_item = MagicMock()
         response = client.delete("/api/cart", headers=auth_headers)
 
     assert response.status_code == 200
-    query = mock_col.delete_one.call_args.args[0]
-    assert query == {"user_id": USER_ID}
+    key = mock_table.delete_item.call_args.kwargs["Key"]
+    assert key == {"user_id": USER_ID}
